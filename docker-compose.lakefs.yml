@@ -1,0 +1,25 @@
+services:
+  lakefs:
+    image: treeverse/lakefs:latest
+    container_name: fraud-detection-lakefs
+    user: "0:0"
+    ports:
+      - "8000:8000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      LAKEFS_DATABASE_TYPE: local
+      LAKEFS_DATABASE_LOCAL_PATH: /home/lakefs/metadata
+      LAKEFS_AUTH_ENCRYPT_SECRET_KEY: ${LAKEFS_AUTH_KEY}
+      LAKEFS_BLOCKSTORE_TYPE: s3
+      LAKEFS_BLOCKSTORE_S3_FORCE_PATH_STYLE: "true"
+      LAKEFS_BLOCKSTORE_S3_ENDPOINT: http://host.docker.internal:9010
+      LAKEFS_BLOCKSTORE_S3_CREDENTIALS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      LAKEFS_BLOCKSTORE_S3_CREDENTIALS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      LAKEFS_LOGGING_LEVEL: INFO
+      LAKEFS_LISTEN_ADDRESS: 0.0.0.0:8000
+    volumes:
+      - lakefs-metadata:/home/lakefs/metadata
+
+volumes:
+  lakefs-metadata:
