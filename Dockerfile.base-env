@@ -17,7 +17,9 @@ RUN pip install --no-cache-dir \
     lakefs \
     mlflow \
     dagshub \
-    boto3
+    boto3 \
+    xgboost \
+    scikit-learn
 
 COPY src/ /app/src/
 COPY config/ /app/config/

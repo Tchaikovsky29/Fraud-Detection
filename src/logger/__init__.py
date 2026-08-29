@@ -100,15 +100,8 @@ def get_logger():
     logger.addHandler(console_handler)
     logger.addHandler(s3_handler)
 
-    logging.getLogger("botocore").setLevel(logging.WARNING)
-    logging.getLogger("py4j").setLevel(logging.WARNING)
-    logging.getLogger("boto3").setLevel(logging.WARNING)
-    logging.getLogger("urllib3").setLevel(logging.WARNING)
-    logging.getLogger("dagshub").setLevel(logging.WARNING)
-    logging.getLogger("httpcore").setLevel(logging.WARNING)
-    logging.getLogger("httpx").setLevel(logging.WARNING)
-    logging.getLogger("mlflow").setLevel(logging.WARNING)
-    logging.getLogger("skl2onnx").setLevel(logging.WARNING)
+    for noisy in ("botocore", "boto3", "urllib3", "dagshub", "httpcore", "httpx", "mlflow", "skl2onnx", "git", "py4j"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
 
     _logger_configured = True
     return logger

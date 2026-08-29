@@ -8,6 +8,7 @@ def data_transformation_component(
     cleaned_data_path: str,
     cleaned_data_checksum: str,   # unused in logic; forces correct KFP cache-busting
     data_mode: str,
+    data_used: str
 ) -> NamedTuple(
     "TransformationOutput",
     [
@@ -104,7 +105,6 @@ def data_transformation_component(
         test_df.coalesce(1).write.mode("overwrite").parquet(f"s3a://{config.test_path}")
         logging.info(f"Wrote train -> {config.train_path}, test -> {config.test_path}")
 
-        # --- MLflow logging (DagsHub-hosted, per bicycle-project convention) ---
         import dagshub
         os.environ["DAGSHUB_USER_TOKEN"] = os.getenv("DAGSHUB_USER_TOKEN")
         dagshub.auth.add_app_token(os.getenv("DAGSHUB_USER_TOKEN"))
@@ -122,6 +122,8 @@ def data_transformation_component(
                     "test_rows": test_count,
                     "data_mode": data_mode,
                     "cleaned_data_checksum": cleaned_data_checksum,
+                    "kfp_run_id": os.environ.get("KFP_RUN_ID", "N/A"),
+                    "data_used": data_used
                 }
             )
             mlflow.spark.log_model(pipeline_model, artifact_path="pipeline_model")

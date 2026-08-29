@@ -6,7 +6,8 @@ from kfp.dsl import component
 )
 def data_cleaning_component(commit_id: str, data_mode: str, validation_status:bool, message:str) -> NamedTuple(
     "CleaningOutput", [("cleaned_data_path", str),
-                       ("checksum", str)]
+                       ("checksum", str),
+                       ("data_used", str)]
 ):
     from src.entity.config_entity import DataCleaningConfig, training_pipeline_config
     from pyspark.sql import functions as F
@@ -33,8 +34,10 @@ def data_cleaning_component(commit_id: str, data_mode: str, validation_status:bo
         spark = get_spark_session("data-cleaning")
         if data_mode == "latest_only":
             df = spark.read.parquet(f"s3a://{config.raw_data_path}/{batches[-1]}")
+            data_used = batches[-1]
         else:
             df = spark.read.parquet(*[f"s3a://{config.raw_data_path}/{b}" for b in batches])
+            data_used = " + ".join(batches)
         logging.info(f"Read {df.count()} rows in data mode {data_mode}")
 
         df = df.withColumn("Transaction Date", F.to_timestamp("Transaction Date"))
@@ -78,8 +81,8 @@ def data_cleaning_component(commit_id: str, data_mode: str, validation_status:bo
         df.coalesce(1).write.mode("overwrite").parquet(f"s3a://{config.cleaned_data_path}")
         logging.info(f"Saved cleaned data to s3a://{config.cleaned_data_path} in parquet format.")
         checksum = get_object_checksum(config.cleaned_data_path)
-        CleaningOutput = NamedTuple("CleaningOutput", [("cleaned_data_path", str), ("checksum", str)])
-        return CleaningOutput(cleaned_data_path=config.cleaned_data_path, checksum=checksum)
+        CleaningOutput = NamedTuple("CleaningOutput", [("cleaned_data_path", str), ("checksum", str), ("data_used", str)])
+        return CleaningOutput(cleaned_data_path=config.cleaned_data_path, checksum=checksum, data_used=data_used)
     except Exception as e:
         raise MyException(e, sys)
     finally:

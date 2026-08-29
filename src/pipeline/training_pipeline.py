@@ -6,6 +6,8 @@ from src.components.commit_retrieval import resolve_commit_component
 from src.components.data_validation import data_validation_component
 from src.components.data_cleaning import data_cleaning_component
 from src.components.data_transformation import data_transformation_component
+from src.components.model_trainer import model_training_component
+from src.components.model_pusher import model_pusher_component
 import datetime
 
 SECRET_KEYS = {
@@ -60,8 +62,23 @@ def training_pipeline():
         cleaned_data_path = clean.outputs["cleaned_data_path"],
         cleaned_data_checksum = clean.outputs["checksum"],
         data_mode = get_commit.outputs["data_mode"],
+        data_used=clean.outputs["data_used"]
     )
     configure_task(transform)
+
+    train = model_training_component(
+        train_path = transform.outputs["train_path"],
+        mlflow_run_id = transform.outputs["mlflow_run_id"]
+    )
+    configure_task(train)
+
+    pusher = model_pusher_component(
+        test_path = transform.outputs["test_path"],
+        model_run_id = train.outputs["model_run_id"],
+        mlflow_run_id = transform.outputs["mlflow_run_id"],
+        model_uri = train.outputs["model_uri"]
+    )
+    configure_task(pusher)
 
 if __name__ == "__main__":
     try:

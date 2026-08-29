@@ -13,13 +13,11 @@ import os
 import kagglehub
 import pandas as pd
 import lakefs
-from src.constants import REPO_NAME, BRANCH_NAME
 
 DATE_COL = "Transaction Date"
 
-repo = lakefs.Repository(REPO_NAME)
-branch = repo.branch(BRANCH_NAME)
-
+repo = lakefs.Repository("fraud-detection")
+branch = repo.branch("main")
 
 def upload_and_commit(data, remote_path: str, commit_msg: str):
     branch.object(remote_path).upload(data, pre_sign = False)
@@ -60,11 +58,11 @@ batch_1[DATE_COL] = batch_1[DATE_COL].astype("datetime64[us]")
 batch_2[DATE_COL] = batch_2[DATE_COL].astype("datetime64[us]")
 batch_3[DATE_COL] = batch_3[DATE_COL].astype("datetime64[us]")
 
-upload_and_commit(
-    batch_1.to_parquet(index=False),
-    "raw/batch-1.parquet",
-    "rewriting parquet with millisecond precision (batch 1)",
-)
+# upload_and_commit(
+#     batch_1.to_parquet(index=False),
+#     "raw/batch-1.parquet",
+#     "rewriting parquet with millisecond precision (batch 1)",
+# )
 
 # upload_and_commit(
 #     batch_2.to_parquet(index=False),
@@ -72,18 +70,18 @@ upload_and_commit(
 #     f"raw: batch 2 ({batch_2[DATE_COL].min().date()} to {batch_2[DATE_COL].max().date()})",
 # )
 
-# upload_and_commit(
-#     batch_3.to_parquet(index=False),
-#     "raw/batch-3.parquet",
-#     f"raw: batch 3 ({batch_3[DATE_COL].min().date()} to {batch_3[DATE_COL].max().date()})",
-# )
-
-holdout_df[DATE_COL] = holdout_df[DATE_COL].astype("datetime64[us]")
-print("holdout dtype after conversion:", holdout_df[DATE_COL].dtype)
 upload_and_commit(
-    holdout_df.to_parquet(index=False),
-    "holdout/eval.parquet",
-    "rewriting parquet with millisecond precision"
+    batch_3.to_parquet(index=False),
+    "raw/batch-3.parquet",
+    f"raw: batch 3 ({batch_3[DATE_COL].min().date()} to {batch_3[DATE_COL].max().date()})",
 )
+
+# holdout_df[DATE_COL] = holdout_df[DATE_COL].astype("datetime64[us]")
+# print("holdout dtype after conversion:", holdout_df[DATE_COL].dtype)
+# upload_and_commit(
+#     holdout_df.to_parquet(index=False),
+#     "holdout/eval.parquet",
+#     "rewriting parquet with millisecond precision"
+# )
 
 print("Done.")

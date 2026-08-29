@@ -15,14 +15,20 @@ def upload(remote_path: str, data):
 
 def commit(message: str):
     """Optional helper: commit whatever Spark just staged on a branch."""
+    changes = {}
+    for change in branch.uncommitted():
+        changes[change.path] = change.type
+    if not changes:
+        return ""
     ref = branch.commit(message=message)
-    print(f"Committed -> {ref.get_commit().id}: {message}")
+    return f"changes: {changes}, commmit_id: {ref.get_commit().id}"
 
 def download(branch_name: str, remote_path: str):
     """Download data from a lakeFS repository."""
     return repo.branch(branch_name).object(remote_path).download()
 
 def fetch_batch():
+    branch = repo.branch("main")
     objects = list(branch.objects(prefix="raw/"))
     batch_files = sorted(
         [o.path for o in objects if "batch-" in o.path],
