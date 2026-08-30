@@ -1,0 +1,46 @@
+columns:
+  - Transaction ID
+  - Customer ID
+  - Transaction Amount
+  - Transaction Date
+  - Payment Method
+  - Product Category
+  - Quantity
+  - Customer Age
+  - Customer Location
+  - Device Used
+  - IP Address
+  - Shipping Address
+  - Billing Address
+  - Is Fraudulent
+  - Account Age Days
+  - Transaction Hour
+
+drop_columns:
+  - Transaction ID
+  - Customer ID
+  - Customer Location
+  - IP Address
+  - Transaction Date
+  - Shipping Address
+  - Billing Address
+
+categorical_columns: 
+  - Payment Method
+  - Product Category
+  - Device Used
+
+numeric_columns: 
+  - Transaction Amount
+  - Quantity
+  - Customer Age
+  - Account Age Days
+  - Transaction Hour
+  - Transaction Day
+  - Transaction DOW
+  - Transaction Month
+
+passthrough_columns: 
+  - Is Address Match
+
+target_column: Is Fraudulent
