@@ -30,7 +30,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: ./Dockerfile.base
+          file: ./Dockerfile.base-env
           push: true
           tags: |
             tchaikovsky29/fraud-detection-base-env:latest
