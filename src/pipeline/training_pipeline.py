@@ -7,6 +7,7 @@ from src.components.data_validation import data_validation_component
 from src.components.data_cleaning import data_cleaning_component
 from src.components.data_transformation import data_transformation_component
 from src.components.model_trainer import model_training_component
+from src.components.model_evaluation import model_evaluation_component
 from src.components.model_pusher import model_pusher_component
 import datetime
 
@@ -72,10 +73,18 @@ def training_pipeline():
     )
     configure_task(train)
 
+    evaluate = model_evaluation_component(
+        test_path = transform.outputs["test_path"],
+        mlflow_run_id = transform.outputs["mlflow_run_id"],
+        model_uri = train.outputs["model_uri"]
+    )
+    configure_task(evaluate)
+
     pusher = model_pusher_component(
         test_path = transform.outputs["test_path"],
-        model_run_id = train.outputs["model_run_id"],
         mlflow_run_id = transform.outputs["mlflow_run_id"],
+        challenger_cost= evaluate.outputs["cost"],
+        gate_passed= evaluate.outputs["gate_passed"],
         model_uri = train.outputs["model_uri"]
     )
     configure_task(pusher)

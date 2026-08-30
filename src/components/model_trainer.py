@@ -10,7 +10,6 @@ def model_training_component(
 ) -> NamedTuple(
     "TrainingOutput",
     [
-        ("model_run_id", str),
         ("model_uri", str)
     ],
 ):
@@ -41,7 +40,7 @@ def model_training_component(
     from src.exception import MyException
     from src.logger import get_logger
 
-    TrainingOutput = NamedTuple("TrainingOutput", [("model_run_id", str), ("model_uri", str)])
+    TrainingOutput = NamedTuple("TrainingOutput", [("model_uri", str)])
 
     spark = None
     try:
@@ -89,7 +88,7 @@ def model_training_component(
                 model_uri = model_info.model_uri
                 logging.info(f"Trained XGBoost, logged model under nested run {model_run_id}.")
 
-        return TrainingOutput(model_run_id=model_run_id, model_uri=model_uri)
+        return TrainingOutput(model_uri=model_uri)
 
     except Exception as e:
         logging.error(f"Model training error: {e}")

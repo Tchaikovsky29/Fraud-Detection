@@ -3,7 +3,7 @@ import sys
 import yaml
 from src.exception import MyException
 from pyspark.sql import SparkSession
-from src.constants import LAKECTL_SERVER_ENDPOINT_URL, LAKECTL_CREDENTIALS_ACCESS_KEY_ID, LAKECTL_CREDENTIALS_SECRET_ACCESS_KEY
+from src.constants import *
 
 def get_spark_session(app_name: str) -> SparkSession:
     lakefs_endpoint = LAKECTL_SERVER_ENDPOINT_URL
@@ -13,6 +13,8 @@ def get_spark_session(app_name: str) -> SparkSession:
     spark = (
         SparkSession.builder.appName(app_name)
         .master("local[*]")
+        .config("spark.driver.memory", "6g")
+        .config("spark.driver.maxResultSize", "2g")
         .config(
             "spark.jars.packages",
             "org.apache.hadoop:hadoop-aws:3.5.0",
@@ -48,3 +50,9 @@ def get_shared_pipeline_run_id() -> str:
             return f"{parts[0]}-{parts[1]}-{parts[2]}"
 
     return "unknown-run-id"
+
+def calculate_cost(tn, fp, fn, tp):
+    fn_rate = fn / (fn + tp) if (fn + tp) > 0 else 0.0
+    fp_rate = fp / (fp + tn) if (fp + tn) > 0 else 0.0
+    cost = float(fn_rate * COST_PER_MISSED_FRAUD + fp_rate * COST_PER_BLOCKED_LEGIT_CUSTOMER)
+    return fn_rate, fp_rate, cost

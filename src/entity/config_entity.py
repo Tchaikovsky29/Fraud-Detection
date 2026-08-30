@@ -44,7 +44,9 @@ class ModelTrainingConfig:
     tree_method: str = "hist"
 
 @dataclass
+class ModelEvaluationConfig:
+    max_acceptable_cost: float = 5
+
+@dataclass
 class ModelPusherConfig:
     registered_model_name: str = "fraud_detection_model"
-    cost_per_missed_fraud: float = 5.0
-    cost_per_blocked_legit_customer: float = 1.0
