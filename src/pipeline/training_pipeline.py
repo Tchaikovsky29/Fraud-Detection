@@ -91,7 +91,7 @@ def training_pipeline():
 
 if __name__ == "__main__":
     try:
-        client = kfp.Client(host="http://localhost:8080/")
+        client = kfp.Client(host="http://localhost:8888/")
         pipeline_id = client.get_pipeline_id(name="training-pipeline")
         if not pipeline_id:
             client.upload_pipeline_from_pipeline_func(

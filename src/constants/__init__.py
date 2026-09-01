@@ -23,6 +23,6 @@ BUCKET_NAME = os.getenv("BUCKET_NAME")
 RAW_DATA_DIR = "raw"
 CLEANED_DATA_DIR = "cleaned"
 TRANSFORMED_DATA_DIR = "transformed"
-DATA_MODE = "cumulative"
+DATA_MODE = "latest_only"
 COST_PER_MISSED_FRAUD = 5.0
 COST_PER_BLOCKED_LEGIT_CUSTOMER = 1.0
