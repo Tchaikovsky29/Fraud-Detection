@@ -1,9 +1,27 @@
 import os
 import json
+import time
 from typing import Dict
 import xgboost as xgb
 import numpy as np
 import kserve
+from prometheus_client import Counter, Histogram, start_http_server
+
+PREDICTION_REQUESTS = Counter(
+    "fraud_detector_requests_total", "Total prediction requests", ["status"]
+)
+PREDICTION_LATENCY = Histogram(
+    "fraud_detector_request_duration_seconds", "Prediction request latency",
+    buckets=[0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0],
+)
+FRAUD_PREDICTIONS = Counter(
+    "fraud_detector_predictions_total", "Predictions by outcome", ["is_fraud"]
+)
+FRAUD_PROBABILITY = Histogram(
+    "fraud_detector_fraud_probability", "Distribution of predicted fraud probability",
+    buckets=[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
+)
+
 
 class FraudDetectorPredictor(kserve.Model):
     """
@@ -44,7 +62,7 @@ class FraudDetectorPredictor(kserve.Model):
         self.spark = get_spark_session("fraud-detector-serving")
         champion_version = client.get_model_version_by_alias(registered_model_name, "champion")
         self.model = mlflow.xgboost.load_model(f"models:/{registered_model_name}@champion")
-        
+
         champion_run = client.get_run(champion_version.run_id)
         champion_parent = champion_run.data.tags.get("mlflow.parentRunId")
         champion_parent_run = client.get_run(champion_parent)
@@ -54,7 +72,7 @@ class FraudDetectorPredictor(kserve.Model):
         # --- Load Categorical Mappings Artifact ---
         try:
             mappings_path = client.download_artifacts(
-                run_id=champion_parent, 
+                run_id=champion_parent,
                 path="transformation_metadata/categorical_mappings.json"
             )
             with open(mappings_path, "r") as f:
@@ -96,7 +114,7 @@ class FraudDetectorPredictor(kserve.Model):
                 self.feature_names.append(numeric_cols[idx])
             else:
                 self.feature_names.append(name)
-        
+
         self.ready = True
 
     def preprocess(self, payload: Dict, headers: Dict[str, str] = None) -> Dict:
@@ -129,80 +147,96 @@ class FraudDetectorPredictor(kserve.Model):
         }
 
     def predict(self, payload: Dict, headers: Dict[str, str] = None) -> Dict:
-        instances = payload["instances"]
-        X = np.array(payload["features"])
+        start = time.time()
+        try:
+            instances = payload["instances"]
+            X = np.array(payload["features"])
 
-        proba = self.model.predict_proba(X)[:, 1]
-        preds = (proba >= float(self.threshold)).astype(int)
+            proba = self.model.predict_proba(X)[:, 1]
+            preds = (proba >= float(self.threshold)).astype(int)
 
-        dmatrix = xgb.DMatrix(X)
-        contribs = self.model.get_booster().predict(dmatrix, pred_contribs=True)
-        shap_vals = contribs[:, :-1]
+            dmatrix = xgb.DMatrix(X)
+            contribs = self.model.get_booster().predict(dmatrix, pred_contribs=True)
+            shap_vals = contribs[:, :-1]
 
-        results = []
-        for i in range(len(preds)):
-            raw_instance = instances[i]
-            feature_impacts = []
+            results = []
+            for i in range(len(preds)):
+                raw_instance = instances[i]
+                feature_impacts = []
 
-            # Parse date if present to resolve derived calendar features
-            tx_date_str = raw_instance.get("Transaction Date")
-            derived_month = None
-            if tx_date_str:
-                try:
-                    derived_month = int(tx_date_str.split("-")[1])
-                except Exception:
-                    pass
-
-            for j in range(len(self.feature_names)):
-                feature_name = self.feature_names[j]
-                shap_val = float(shap_vals[i][j])
-
-                # 1. Handle One-Hot Encoded Features with standard/indexer naming formats
-                if "_ohe_" in feature_name or "_idx_" in feature_name:
-                    sep = "_ohe_" if "_ohe_" in feature_name else "_idx_"
-                    parent_col, category_str = feature_name.split(sep)
-                    
-                    # Convert numeric category string (e.g. "0.0") to integer index if needed
+                # Parse date if present to resolve derived calendar features
+                tx_date_str = raw_instance.get("Transaction Date")
+                derived_month = None
+                if tx_date_str:
                     try:
-                        cat_idx = int(float(category_str))
-                        if parent_col in self.categorical_mappings and cat_idx < len(self.categorical_mappings[parent_col]):
-                            category_val = self.categorical_mappings[parent_col][cat_idx]
-                        else:
+                        derived_month = int(tx_date_str.split("-")[1])
+                    except Exception:
+                        pass
+
+                for j in range(len(self.feature_names)):
+                    feature_name = self.feature_names[j]
+                    shap_val = float(shap_vals[i][j])
+
+                    # 1. Handle One-Hot Encoded Features with standard/indexer naming formats
+                    if "_ohe_" in feature_name or "_idx_" in feature_name:
+                        sep = "_ohe_" if "_ohe_" in feature_name else "_idx_"
+                        parent_col, category_str = feature_name.split(sep)
+
+                        # Convert numeric category string (e.g. "0.0") to integer index if needed
+                        try:
+                            cat_idx = int(float(category_str))
+                            if parent_col in self.categorical_mappings and cat_idx < len(self.categorical_mappings[parent_col]):
+                                category_val = self.categorical_mappings[parent_col][cat_idx]
+                            else:
+                                category_val = category_str
+                        except ValueError:
                             category_val = category_str
-                    except ValueError:
-                        category_val = category_str
 
-                    raw_input_str = str(raw_instance.get(parent_col, "")).lower()
-                    raw_val = 1 if raw_input_str == str(category_val).lower() else 0
-                    display_feature_name = f"{parent_col}: {category_val}"
+                        raw_input_str = str(raw_instance.get(parent_col, "")).lower()
+                        raw_val = 1 if raw_input_str == str(category_val).lower() else 0
+                        display_feature_name = f"{parent_col}: {category_val}"
 
-                # 2. Handle Derived Date/Time Features
-                elif feature_name == "Transaction Month":
-                    raw_val = derived_month if derived_month is not None else raw_instance.get("Transaction Month", "N/A")
-                    display_feature_name = feature_name
+                    # 2. Handle Derived Date/Time Features
+                    elif feature_name == "Transaction Month":
+                        raw_val = derived_month if derived_month is not None else raw_instance.get("Transaction Month", "N/A")
+                        display_feature_name = feature_name
 
-                # 3. Handle Standard Input Features
-                else:
-                    raw_val = raw_instance.get(feature_name, "N/A")
-                    display_feature_name = feature_name
+                    # 3. Handle Standard Input Features
+                    else:
+                        raw_val = raw_instance.get(feature_name, "N/A")
+                        display_feature_name = feature_name
 
-                feature_impacts.append({
-                    "feature": display_feature_name,
-                    "shap_value": shap_val,
-                    "raw_value": raw_val
+                    feature_impacts.append({
+                        "feature": display_feature_name,
+                        "shap_value": shap_val,
+                        "raw_value": raw_val
+                    })
+
+                top_factors = sorted(feature_impacts, key=lambda x: abs(x["shap_value"]), reverse=True)[:5]
+
+                is_fraud = bool(preds[i])
+                fraud_probability = float(proba[i])
+
+                FRAUD_PREDICTIONS.labels(is_fraud=str(is_fraud)).inc()
+                FRAUD_PROBABILITY.observe(fraud_probability)
+
+                results.append({
+                    "is_fraud": is_fraud,
+                    "fraud_probability": fraud_probability,
+                    "top_shap_factors": top_factors
                 })
 
-            top_factors = sorted(feature_impacts, key=lambda x: abs(x["shap_value"]), reverse=True)[:5]
+            PREDICTION_REQUESTS.labels(status="success").inc()
+            return {"predictions": results}
 
-            results.append({
-                "is_fraud": bool(preds[i]),
-                "fraud_probability": float(proba[i]),
-                "top_shap_factors": top_factors
-            })
-
-        return {"predictions": results}
+        except Exception:
+            PREDICTION_REQUESTS.labels(status="error").inc()
+            raise
+        finally:
+            PREDICTION_LATENCY.observe(time.time() - start)
 
 
 if __name__ == "__main__":
+    start_http_server(8082)  # independent metrics server -- decoupled from kserve's own HTTP/gRPC ports
     model = FraudDetectorPredictor(name="fraud-detector")
     kserve.ModelServer().start([model])

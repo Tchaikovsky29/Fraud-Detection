@@ -12,6 +12,13 @@ spec:
         envFrom:
           - secretRef:
               name: pipeline-secrets
+        ports:
+          - containerPort: 8080
+            name: http1
+            protocol: TCP
+          - containerPort: 8082
+            name: metrics
+            protocol: TCP
         resources:
           requests:
             cpu: "1"

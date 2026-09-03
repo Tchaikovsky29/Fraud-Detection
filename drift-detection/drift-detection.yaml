@@ -1,0 +1,31 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: drift-detector
+  namespace: drift-detection
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: drift-detector
+  template:
+    metadata:
+      labels:
+        app: drift-detector
+    spec:
+      containers:
+        - name: drift-detector
+          image: tchaikovsky29/fraud-detector-drift:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8090
+              name: metrics
+          envFrom:
+            - secretRef:
+                name: pipeline-secrets
+          env:
+            - name: DRIFT_CHECK_INTERVAL_SECONDS
+              value: "300"
+          resources:
+            requests: { cpu: "1", memory: "3Gi" }
+            limits: { cpu: "2", memory: "4Gi" }
