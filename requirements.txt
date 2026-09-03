@@ -6,3 +6,4 @@ pyspark
 kfp
 mlflow
 dagshub
+kafka-python
