@@ -54,5 +54,9 @@ def get_shared_pipeline_run_id() -> str:
 def calculate_cost(tn, fp, fn, tp):
     fn_rate = fn / (fn + tp) if (fn + tp) > 0 else 0.0
     fp_rate = fp / (fp + tn) if (fp + tn) > 0 else 0.0
-    cost = float(fn_rate * COST_PER_MISSED_FRAUD + fp_rate * COST_PER_BLOCKED_LEGIT_CUSTOMER)
-    return fn_rate, fp_rate, cost
+    
+    total_financial_cost = (fn * COST_PER_MISSED_FRAUD) + (fp * COST_PER_BLOCKED_LEGIT_CUSTOMER)
+    
+    total_transactions = tn + fp + fn + tp
+    average_cost_per_transaction = float(total_financial_cost / total_transactions) if total_transactions > 0 else 0.0
+    return fn_rate, fp_rate, average_cost_per_transaction

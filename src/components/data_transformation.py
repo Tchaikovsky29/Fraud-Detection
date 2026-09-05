@@ -17,24 +17,20 @@ def data_transformation_component(
         ("mlflow_run_id", str),
     ],
 ):
-    """
-    Loads cleaned Parquet from lakeFS and:
-      - Fits a PySpark ML Pipeline (StringIndexer + OneHotEncoder on
-        categorical columns, StandardScaler on numeric columns) -- mirrors
-        the notebook's sklearn ColumnTransformer
-      - Splits into train/test sets
-      - Writes train/test Parquet + the fitted PipelineModel to the
-        `features` branch (staged, not committed -- committed once at the
-        end of the full pipeline run)
-      - Logs transformation params to MLflow
-    """
     import sys
     import os
+    import json
     from collections import namedtuple
 
     import mlflow
     from pyspark.ml import Pipeline
-    from pyspark.ml.feature import OneHotEncoder, StandardScaler, StringIndexer, VectorAssembler
+    from pyspark.ml.feature import (
+        OneHotEncoder, 
+        StandardScaler, 
+        StringIndexer, 
+        StringIndexerModel,
+        VectorAssembler
+    )
 
     from src.utils.main_utils import get_spark_session, read_yaml_file, get_shared_pipeline_run_id
     from src.configuration.lakefs_connection import get_object_checksum
@@ -92,6 +88,17 @@ def data_transformation_component(
         pipeline_model = pipeline.fit(df)
         logging.info("Fitted preprocessing pipeline (StringIndexer + OneHotEncoder + StandardScaler).")
 
+        # --- Extract and save the categorical mapping ---
+        category_mappings = {}
+        for stage in pipeline_model.stages:
+            if isinstance(stage, StringIndexerModel):
+                category_mappings[stage.getInputCol()] = stage.labels
+        
+        mappings_file = "categorical_mappings.json"
+        with open(mappings_file, "w") as f:
+            json.dump(category_mappings, f, indent=4)
+        logging.info("Extracted StringIndexer mappings and saved to local JSON.")
+
         transformed_df = pipeline_model.transform(df).select("features", target_col)
 
         # --- Train/test split ---
@@ -109,6 +116,7 @@ def data_transformation_component(
         os.environ["DAGSHUB_USER_TOKEN"] = os.getenv("DAGSHUB_USER_TOKEN")
         dagshub.auth.add_app_token(os.getenv("DAGSHUB_USER_TOKEN"))
         dagshub.init(repo_owner=os.environ["DAGSHUB_REPO_OWNER"], repo_name=os.environ["DAGSHUB_REPO_NAME"], mlflow=True)
+        
         with mlflow.start_run() as run:
             run_id = run.info.run_id
             logging.info(f"Started MLflow run: {run_id}")
@@ -126,8 +134,11 @@ def data_transformation_component(
                     "data_used": data_used
                 }
             )
+            
+            mlflow.log_artifact(mappings_file, artifact_path="transformation_metadata")
+            
             mlflow.spark.log_model(pipeline_model, artifact_path="pipeline_model")
-            logging.info("Logged preprocessing pipeline model to MLflow.")
+            logging.info("Logged preprocessing pipeline model and mappings to MLflow.")
 
         spark.stop()
         return TransformationOutput(

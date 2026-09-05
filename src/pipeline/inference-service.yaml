@@ -1,0 +1,28 @@
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: fraud-detector
+  namespace: kserve
+spec:
+  predictor:
+    containers:
+      - name: kserve-container
+        image: tchaikovsky29/fraud-detector-predictor:latest
+        imagePullPolicy: Always
+        envFrom:
+          - secretRef:
+              name: pipeline-secrets
+        ports:
+          - containerPort: 8080
+            name: http1
+            protocol: TCP
+          - containerPort: 8082
+            name: metrics
+            protocol: TCP
+        resources:
+          requests:
+            cpu: "1"
+            memory: "3Gi"
+          limits:
+            cpu: "2"
+            memory: "4Gi"

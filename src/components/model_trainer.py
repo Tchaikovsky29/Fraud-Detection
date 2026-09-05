@@ -13,20 +13,6 @@ def model_training_component(
         ("model_uri", str)
     ],
 ):
-    """
-    Trains the notebook's winning model -- XGBoost -- using the exact
-    hyperparameters found by the notebook's own Optuna search (70 trials,
-    best test accuracy 0.9545). No evaluation, no promotion decision here
-    -- that's the evaluation component's job.
-
-    NOTE: the notebook used tree_method="gpu_hist" (GPU-accelerated).
-    This environment has no GPU, so tree_method="hist" (CPU) is used
-    instead -- same algorithm family, CPU execution.
-
-    Logs the fitted model as an MLflow artifact under a nested child run
-    (so evaluation can load it independently via model_run_id), nested
-    under the parent run started in the transformation component.
-    """
     import sys
     import os
 
@@ -69,6 +55,12 @@ def model_training_component(
         pdf = train_df.select("features", target_col).toPandas()
         X_train = np.array(pdf["features"].apply(lambda v: v.toArray()).tolist())
         y_train = pdf[target_col].values
+
+        num_neg = np.sum(y_train == 0)
+        num_pos = np.sum(y_train == 1)
+        scale_pos_weight = num_neg / num_pos if num_pos > 0 else 1.0
+        BEST_PARAMS["scale_pos_weight"] = scale_pos_weight
+        logging.info(f"Setting scale_pos_weight to {scale_pos_weight:.2f}")
 
         import dagshub
         os.environ["DAGSHUB_USER_TOKEN"] = os.getenv("DAGSHUB_USER_TOKEN")

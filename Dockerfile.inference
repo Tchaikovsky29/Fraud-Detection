@@ -1,0 +1,4 @@
+FROM tchaikovsky29/fraud-detection-base-env:latest
+RUN pip install --no-cache-dir kserve prometheus-client
+COPY src/pipeline/prediction_pipeline.py /app/predictor.py
+CMD ["python", "/app/predictor.py"]

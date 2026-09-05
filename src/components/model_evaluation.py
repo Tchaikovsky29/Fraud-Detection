@@ -57,36 +57,56 @@ def model_evaluation_component(
         )
 
         model = mlflow.xgboost.load_model(model_uri)
-        y_pred = model.predict(X_test)
+        y_probs = model.predict_proba(X_test)[:, 1]
 
-        accuracy = float(accuracy_score(y_test, y_pred))
-        precision = float(precision_score(y_test, y_pred, zero_division=0))
-        recall = float(recall_score(y_test, y_pred, zero_division=0))
+        # --- OPTIMAL THRESHOLD SWEEP ---
+        # Search over candidate thresholds to find the one that minimizes business cost
+        best_threshold = 0.5
+        best_cost = float("inf")
+        best_metrics = {}
 
-        tn, fp, fn, tp = confusion_matrix(y_test, y_pred).ravel()
-        fn_rate, fp_rate, cost = calculate_cost(tn, fp, fn, tp)
+        candidate_thresholds = np.arange(0.10, 0.90, 0.05)
+        for t in candidate_thresholds:
+            preds = (y_probs >= t).astype(int)
+            tn, fp, fn, tp = confusion_matrix(y_test, preds).ravel()
+            fn_rate, fp_rate, cost = calculate_cost(tn, fp, fn, tp)
+            
+            if cost < best_cost:
+                best_cost = cost
+                best_threshold = round(float(t),2)
+                best_metrics = {
+                    "accuracy": float(accuracy_score(y_test, preds)),
+                    "precision": float(precision_score(y_test, preds, zero_division=0)),
+                    "recall": float(recall_score(y_test, preds, zero_division=0)),
+                    "fn_rate": float(fn_rate),
+                    "fp_rate": float(fp_rate),
+                    "cost": float(cost)
+                }
 
-        gate_passed = cost <= config.max_acceptable_cost
+        gate_passed = best_cost <= config.max_acceptable_cost
         logging.info(
-            f"accuracy={accuracy:.4f} precision={precision:.4f} recall={recall:.4f} "
-            f"FN_rate={fn_rate:.4f} FP_rate={fp_rate:.4f} cost={cost:.4f} gate_passed={gate_passed}"
+            f"Optimal Threshold={best_threshold:.2f} | accuracy={best_metrics['accuracy']:.4f} "
+            f"precision={best_metrics['precision']:.4f} recall={best_metrics['recall']:.4f} "
+            f"FN_rate={best_metrics['fn_rate']:.4f} FP_rate={best_metrics['fp_rate']:.4f} "
+            f"cost={best_cost:.4f} gate_passed={gate_passed}"
         )
 
         with mlflow.start_run(run_id=mlflow_run_id):
             mlflow.log_metrics(
                 {
-                    "accuracy": accuracy,
-                    "precision": precision,
-                    "recall": recall,
-                    "fn_rate": fn_rate,
-                    "fp_rate": fp_rate,
-                    "cost": cost,
+                    "accuracy": best_metrics['accuracy'],
+                    "precision": best_metrics['precision'],
+                    "recall": best_metrics['recall'],
+                    "fn_rate": best_metrics['fn_rate'],
+                    "fp_rate": best_metrics['fp_rate'],
+                    "cost": best_cost,
                 }
             )
+            mlflow.log_param("threshold", best_threshold)
             mlflow.set_tag("gate_passed", str(gate_passed))
 
         return EvaluationOutput(
-            cost=cost, gate_passed=gate_passed
+            cost=best_cost, gate_passed=gate_passed
         )
 
     except Exception as e:

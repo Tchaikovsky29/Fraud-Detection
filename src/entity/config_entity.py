@@ -33,20 +33,20 @@ class DataTransformationConfig:
 
 @dataclass
 class ModelTrainingConfig:
-    learning_rate: float = 0.2381413287859572
-    n_estimators: int = 439
-    max_depth: int = 6
-    min_child_weight: int = 3
-    gamma: float = 0.3308509875421135
-    subsample: float = 0.9642190731549022
-    colsample_bytree: float = 0.40885708517990055
-    reg_alpha: float = 0.35435676335715693
+    learning_rate: float = 0.005187544455303851
+    n_estimators: int = 1028
+    max_depth: int = 2
+    min_child_weight: int = 10
+    gamma: float = 1.5116687959058668
+    subsample: float = 0.8180714267188646
+    colsample_bytree: float = 0.9926524228665097
+    reg_alpha: float = 0.22366552184703914
     tree_method: str = "hist"
 
 @dataclass
 class ModelEvaluationConfig:
-    max_acceptable_cost: float = 5
-
+    max_acceptable_cost: float = 1.0
+    
 @dataclass
 class ModelPusherConfig:
     registered_model_name: str = "fraud_detection_model"
