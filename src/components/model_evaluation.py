@@ -97,16 +97,16 @@ def model_evaluation_component(
                     "accuracy": best_metrics['accuracy'],
                     "precision": best_metrics['precision'],
                     "recall": best_metrics['recall'],
-                    "fn_rate": fn_rate,
-                    "fp_rate": fp_rate,
-                    "cost": cost,
+                    "fn_rate": best_metrics['fn_rate'],
+                    "fp_rate": best_metrics['fp_rate'],
+                    "cost": best_cost,
                 }
             )
             mlflow.log_param("threshold", best_threshold)
             mlflow.set_tag("gate_passed", str(gate_passed))
 
         return EvaluationOutput(
-            cost=cost, gate_passed=gate_passed
+            cost=best_cost, gate_passed=gate_passed
         )
 
     except Exception as e:

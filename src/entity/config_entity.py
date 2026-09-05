@@ -45,7 +45,7 @@ class ModelTrainingConfig:
 
 @dataclass
 class ModelEvaluationConfig:
-    max_acceptable_cost: float = 2.5
+    max_acceptable_cost: float = 1.0
     
 @dataclass
 class ModelPusherConfig:

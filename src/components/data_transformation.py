@@ -92,7 +92,6 @@ def data_transformation_component(
         category_mappings = {}
         for stage in pipeline_model.stages:
             if isinstance(stage, StringIndexerModel):
-                # The index of the label in this array corresponds to the numerical index assigned by PySpark
                 category_mappings[stage.getInputCol()] = stage.labels
         
         mappings_file = "categorical_mappings.json"

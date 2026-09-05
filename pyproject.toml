@@ -1,0 +1,10 @@
+[project]
+name = "src"
+version = "0.0.1"
+description = ""
+authors = [{name = "Arav Bhardwaj", email = "bhardwajarav29@gmail.com"}]
+
+[tool.setuptools]
+packages = {find = {}}
+
+[tool.setuptools.dynamic]

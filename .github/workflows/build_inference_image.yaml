@@ -1,13 +1,10 @@
-name: Build and Push Docker Images
+name: Build and Push Inference Docker Image
 
 on:
   pull_request:
     branches: [main]
     paths:
-      - 'src/**'
-      - '!src/pipeline/**'
-      - '!src/components/**'
-      - 'config/**'
+      - 'src/pipeline/prediction_pipeline.py'
   workflow_dispatch: {}
 
 jobs:
@@ -26,12 +23,12 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Build and push base image
+      - name: Build and push inference image
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: ./Dockerfile.base-env
+          file: ./Dockerfile.inference
           push: true
           tags: |
-            tchaikovsky29/fraud-detection-base-env:latest
-            tchaikovsky29/fraud-detection-base-env:${{ github.sha }}
+            tchaikovsky29/fraud-detector-predictor:latest
+            tchaikovsky29/fraud-detector-predictor:${{ github.sha }}

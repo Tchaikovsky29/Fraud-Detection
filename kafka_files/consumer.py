@@ -39,8 +39,9 @@ def main():
     consumer = KafkaConsumer(
         TOPIC,
         bootstrap_servers=KAFKA_BOOTSTRAP,
+        group_id=f"consumer-{uuid.uuid4().hex[:6]}",  # Fresh consumer group
         value_deserializer=lambda v: json.loads(v.decode("utf-8")),
-        auto_offset_reset="earliest",
+        auto_offset_reset="latest",                   # Listen for new messages only
     )
 
     raw_rows = []
@@ -65,7 +66,7 @@ def main():
             "is_fraud_predicted": prediction["is_fraud"],
             "fraud_probability": prediction["fraud_probability"],
             "top_shap_factors": json.dumps(prediction["top_shap_factors"]),
-            "actual_is_fraud": record.get("Is Fraudulent"),  # holdout has real labels -- enables true evaluation later
+            "actual_is_fraud": record.get("Is Fraudulent"),  # holdout has real labels
         })
 
         if len(prediction_buffer) >= FLUSH_EVERY:
@@ -76,8 +77,6 @@ def main():
 
     print(f"Building batch-4.parquet from {len(raw_rows)} consumed transactions...")
     raw_df = pd.DataFrame(raw_rows)
-    # Same timestamp-precision fix as the original ingestion script --
-    # Spark can't read nanosecond-precision Parquet timestamps.
     raw_df["Transaction Date"] = pd.to_datetime(raw_df["Transaction Date"]).astype("datetime64[us]")
 
     repo = lakefs.Repository(REPO_NAME)

@@ -1,9 +1,15 @@
 pyarrow
 pandas
+numpy
+scikit-learn
 kagglehub
 lakefs
-pyspark
+pyspark==4.2.0
 kfp
 mlflow
 dagshub
 kafka-python
+evidently==0.4.33
+prometheus-client
+xgboost
+kserve
