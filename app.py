@@ -14,7 +14,7 @@ load_dotenv()
 st.set_page_config(page_title="Fraud Detection Demo", layout="wide")
 
 GRAFANA_URL = (
-    "http://localhost:8080/d/ad4dm2b/fraud-detector-serving-metrics"
+    "http://localhost:8080/d/adg6dfv/fraud-detector-serving-metrics"
     "?from=now-6h&to=now&timezone=browser&refresh=auto&kiosk"
 )
 COST_PER_MISSED_FRAUD = 5.0
