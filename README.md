@@ -141,7 +141,6 @@ The Streamlit dashboard includes a tool-using LLM assistant grounded in the actu
 .
 ├── app.py                     # Streamlit demo: embedded Grafana, flagged transactions, LLM chat
 ├── data_upload.py             # One-time ingestion: Kaggle → chronological batches → lakeFS
-├── demo.py                    # Holdout metrics computation (joins Kafka predictions + batch-4)
 ├── eg_drift_report.html       # Example Evidently drift report
 ├── config/schema.yaml         # Column roles: categorical / numeric / passthrough / target
 ├── src/
