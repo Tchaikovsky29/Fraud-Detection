@@ -21,36 +21,127 @@ Metrics are computed on a **true held-out set** — transactions the model never
 
 ## Architecture
 ```mermaid
+%%{init: {
+  "flowchart": {
+    "nodeSpacing": 35,
+    "rankSpacing": 80,
+    "curve": "basis"
+  }
+}}%%
+
 flowchart TD
-    A[Kaggle Dataset] --> B[data_upload.py]
-    B --> C[(lakeFS raw/)]
-    C --> D[(MinIO)]
 
-    subgraph KFP["Kubeflow Pipeline"]
-        E[commit_retrieval] --> F[data_validation]
-        F --> G[data_cleaning]
-        G --> H["data_transformation<br/>(PySpark: StringIndexer/OHE/Scaler)"]
-        H --> I["model_trainer<br/>(XGBoost)"]
-        I --> J["model_evaluation<br/>(threshold sweep + gate)"]
-        J --> K["model_pusher<br/>(champion/challenger)"]
-    end
+subgraph group_data["Versioned Data"]
+  direction TB
 
-    C --> E
-    K --> L[(MLflow / DagsHub<br/>Model Registry)]
+  node_upload["Chronological ingestion<br/>Python ingestion<br/>[data_upload.py]"]
+  node_lakefs[("lakeFS repository<br/>versioned data lake")]
+  node_minio[("MinIO<br/>object storage")]
 
-    L --> M["KServe Predictor<br/>(Spark preprocessing + XGBoost + SHAP)"]
-    M --> N["Prometheus + Grafana<br/>(live serving metrics)"]
+  node_upload -->|"commits batches"| node_lakefs
+  node_lakefs -->|"backed by"| node_minio
+end
 
-    O["Kafka Producer<br/>(replays holdout set)"] --> P["Kafka Consumer"]
-    C -.holdout.-> O
-    P --> M
-    P --> Q[(lakeFS raw/batch-4)]
 
-    L --> R["Drift Detection Microservice<br/>(Evidently)"]
-    R -.drift metrics + HTML report.-> L
+subgraph group_training["Training & Promotion"]
+  direction TB
 
-    N --> S["Streamlit Dashboard<br/>(embedded Grafana + flagged txns + LLM chat)"]
-    P --> S
+  node_training_pipeline{{"Kubeflow training pipeline<br/>Kubeflow Pipeline"}}
+  node_commit_retrieval["Commit pinning<br/>pipeline component"]
+  node_data_prep["Validation &amp; cleaning<br/>pipeline components<br/>[data_validation.py]"]
+  node_feature_build["Spark feature pipeline<br/>PySpark preprocessing"]
+  node_schema["Feature schema<br/>schema contract<br/>[schema.yaml]"]
+  node_model_trainer["XGBoost trainer<br/>training component<br/>[model_trainer.py]"]
+  node_evaluation["Cost-based evaluation<br/>evaluation component"]
+  node_promotion["Champion promotion<br/>registry pusher<br/>[model_pusher.py]"]
+  node_mlflow[("MLflow / DagsHub<br/>experiment tracking &amp; registry")]
+
+  node_training_pipeline -->|"orchestrates"| node_commit_retrieval
+  node_commit_retrieval -->|"pinned data"| node_data_prep
+  node_data_prep -->|"validated data"| node_feature_build
+  node_schema -->|"feature roles"| node_feature_build
+  node_feature_build -->|"fitted features"| node_model_trainer
+  node_model_trainer -->|"candidate model"| node_evaluation
+  node_evaluation -->|"winner only"| node_promotion
+  node_evaluation -->|"logs runs and metrics"| node_mlflow
+  node_promotion -->|"registers champion"| node_mlflow
+end
+
+
+subgraph group_serving["Serving &amp; Replay"]
+  direction TB
+
+  node_kafka_producer["Kafka replay producer<br/>[producer.py]"]
+  node_kafka_consumer["Kafka replay consumer<br/>[consumer.py]"]
+  node_kserve{{"KServe predictor<br/>inference service"}}
+
+  node_kafka_producer -->|"replay traffic"| node_kafka_consumer
+  node_kafka_consumer -->|"prediction requests"| node_kserve
+end
+
+
+subgraph group_observability["Monitoring &amp; Analyst UI"]
+  direction TB
+
+  node_prometheus_grafana[("Prometheus &amp; Grafana<br/>metrics monitoring")]
+  node_drift_detector{{"Evidently drift service<br/>Kubernetes microservice<br/>[drift_detector.py]"}}
+  node_analyst_ui["Streamlit analyst UI<br/>analyst application<br/>[app.py]"]
+
+  node_prometheus_grafana -->|"operational views"| node_analyst_ui
+  node_drift_detector -->|"drift status"| node_analyst_ui
+end
+
+
+node_minio ~~~ node_training_pipeline
+node_mlflow ~~~ node_kafka_producer
+node_kserve ~~~ node_prometheus_grafana
+
+
+node_lakefs -->|"resolves commit"| node_commit_retrieval
+
+node_mlflow -->|"loads champion artifacts"| node_kserve
+
+node_kafka_consumer -->|"commits live batch"| node_lakefs
+
+node_kserve -->|"serving metrics"| node_prometheus_grafana
+
+node_lakefs -->|"training and current data"| node_drift_detector
+
+node_drift_detector -->|"HTML drift reports"| node_mlflow
+
+node_kserve -->|"scores and SHAP"| node_analyst_ui
+
+
+click node_upload "https://github.com/tchaikovsky29/fraud-detection/blob/main/data_upload.py"
+click node_lakefs "https://github.com/tchaikovsky29/fraud-detection/blob/main/src/configuration/lakefs_connection.py"
+click node_training_pipeline "https://github.com/tchaikovsky29/fraud-detection/blob/main/src/pipeline/training_pipeline.py"
+click node_commit_retrieval "https://github.com/tchaikovsky29/fraud-detection/blob/main/src/components/commit_retrieval.py"
+click node_data_prep "https://github.com/tchaikovsky29/fraud-detection/blob/main/src/components/data_validation.py"
+click node_feature_build "https://github.com/tchaikovsky29/fraud-detection/blob/main/src/components/data_transformation.py"
+click node_schema "https://github.com/tchaikovsky29/fraud-detection/blob/main/config/schema.yaml"
+click node_model_trainer "https://github.com/tchaikovsky29/fraud-detection/blob/main/src/components/model_trainer.py"
+click node_evaluation "https://github.com/tchaikovsky29/fraud-detection/blob/main/src/components/model_evaluation.py"
+click node_promotion "https://github.com/tchaikovsky29/fraud-detection/blob/main/src/components/model_pusher.py"
+click node_kserve "https://github.com/tchaikovsky29/fraud-detection/blob/main/src/pipeline/inference-service.yaml"
+click node_kafka_producer "https://github.com/tchaikovsky29/fraud-detection/blob/main/kafka_files/producer.py"
+click node_kafka_consumer "https://github.com/tchaikovsky29/fraud-detection/blob/main/kafka_files/consumer.py"
+click node_prometheus_grafana "https://github.com/tchaikovsky29/fraud-detection/blob/main/src/pipeline/kserve.pod_monitor.yaml"
+click node_drift_detector "https://github.com/tchaikovsky29/fraud-detection/blob/main/drift-detection/drift_detector.py"
+click node_analyst_ui "https://github.com/tchaikovsky29/fraud-detection/blob/main/app.py"
+
+
+classDef toneNeutral fill:#f8fafc,stroke:#334155,stroke-width:1.5px,color:#0f172a
+classDef toneBlue fill:#dbeafe,stroke:#2563eb,stroke-width:1.5px,color:#172554
+classDef toneAmber fill:#fef3c7,stroke:#d97706,stroke-width:1.5px,color:#78350f
+classDef toneMint fill:#dcfce7,stroke:#16a34a,stroke-width:1.5px,color:#14532d
+classDef toneRose fill:#ffe4e6,stroke:#e11d48,stroke-width:1.5px,color:#881337
+classDef toneIndigo fill:#e0e7ff,stroke:#4f46e5,stroke-width:1.5px,color:#312e81
+classDef toneTeal fill:#ccfbf1,stroke:#0f766e,stroke-width:1.5px,color:#134e4a
+
+class node_upload,node_lakefs,node_minio toneBlue
+class node_training_pipeline,node_commit_retrieval,node_data_prep,node_feature_build,node_schema,node_model_trainer,node_evaluation,node_mlflow,node_promotion toneAmber
+class node_kserve,node_kafka_producer,node_kafka_consumer toneMint
+class node_prometheus_grafana,node_drift_detector,node_analyst_ui toneRose
 ```
 ---
 ## Pipeline run (Kubeflow UI):
