@@ -1,14 +1,19 @@
+import asyncio
 import io
 import json
 import os
-from dotenv import load_dotenv
+import threading
+import concurrent.futures
+
 import boto3
+import lakefs
 import pandas as pd
 import streamlit as st
+from dotenv import load_dotenv
+from groq import Groq
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
 from sklearn.metrics import confusion_matrix, accuracy_score, precision_score, recall_score
-import lakefs
-# Replaced anthropic with openai for OpenRouter
-from openai import OpenAI
 
 load_dotenv()
 st.set_page_config(page_title="Fraud Detection Demo", layout="wide")
@@ -19,9 +24,9 @@ GRAFANA_URL = (
 )
 COST_PER_MISSED_FRAUD = 5.0
 COST_PER_BLOCKED_LEGIT_CUSTOMER = 1.0
+MCP_SERVER_SCRIPT = os.environ.get("MCP_SERVER_SCRIPT", "mcp_server.py")
+GROQ_MODEL = os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b")
 
-
-# ---------- Data loading ----------
 
 @st.cache_data(ttl=30)
 def fetch_all_predictions():
@@ -32,20 +37,17 @@ def fetch_all_predictions():
         aws_secret_access_key=os.environ["MINIO_SECRET_ACCESS_KEY"],
     )
     bucket = os.environ["BUCKET_NAME"]
-
     paginator = s3.get_paginator("list_objects_v2")
     dfs = []
     for page in paginator.paginate(Bucket=bucket, Prefix="predictions/"):
         for obj in page.get("Contents", []):
             body = s3.get_object(Bucket=bucket, Key=obj["Key"])["Body"].read()
             dfs.append(pd.read_parquet(io.BytesIO(body)))
-
     if not dfs:
         raise RuntimeError("No prediction files found under predictions/ -- did the consumer run?")
-
     return pd.concat(dfs, ignore_index=True)
 
-st.cache_data(ttl=30)
+@st.cache_data(ttl=30)
 def fetch_batch4():
     repo = lakefs.Repository(os.getenv("LAKEFS_REPO_NAME"))
     obj = repo.branch("main").object("raw/batch-4.parquet")
@@ -65,163 +67,164 @@ def compute_metrics(df):
     return {"accuracy": accuracy, "precision": precision, "recall": recall, "cost": cost}
 
 
-# ---------- LLM tools, grounded in the actual dataframe ----------
-
-def filter_transactions(df, is_fraud=None, min_probability=None, max_probability=None,
-                         payment_method=None, limit=10):
-    result = df
-    if is_fraud is not None:
-        result = result[result["is_fraud_predicted"] == is_fraud]
-    if min_probability is not None:
-        result = result[result["fraud_probability"] >= min_probability]
-    if max_probability is not None:
-        result = result[result["fraud_probability"] <= max_probability]
-    if payment_method is not None:
-        result = result[result["Payment Method"].str.lower() == payment_method.lower()]
-    cols = ["transaction_id", "transaction_date", "Transaction Amount", "Payment Method",
-            "Product Category", "fraud_probability", "actual_is_fraud", "top_shap_factors"]
-    return result[cols].head(limit).to_dict(orient="records")
-
-
-def get_summary_stats(df, group_by=None):
-    if group_by and group_by in df.columns:
-        grouped = df.groupby(group_by).agg(
-            total=("is_fraud_predicted", "count"),
-            flagged_fraud=("is_fraud_predicted", "sum"),
-            avg_probability=("fraud_probability", "mean"),
-        )
-        grouped["fraud_rate"] = grouped["flagged_fraud"] / grouped["total"]
-        return grouped.reset_index().to_dict(orient="records")
-    return {
-        "total_transactions": len(df),
-        "flagged_fraud_count": int(df["is_fraud_predicted"].sum()),
-        "fraud_rate": float(df["is_fraud_predicted"].mean()),
-    }
-
-# Translated to OpenAI/OpenRouter function schema format
-TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "filter_transactions",
-            "description": "Get individual transactions matching filters (fraud flag, probability range, payment method). Returns up to `limit` rows with full details including SHAP explanation factors.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "is_fraud": {"type": "boolean", "description": "Filter to flagged (true) or not-flagged (false) transactions"},
-                    "min_probability": {"type": "number"},
-                    "max_probability": {"type": "number"},
-                    "payment_method": {"type": "string"},
-                    "limit": {"type": "integer", "default": 10},
-                },
+# ---------- Persistent MCP + Groq bridge ----------
+# Keeps the MCP server subprocess and session alive across Streamlit
+# reruns, on a dedicated background thread with its own event loop --
+# spawning a fresh subprocess per chat message would both add latency
+# and defeat the MCP server's own data cache.
+def mcp_tools_to_groq_format(mcp_tools):
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": t.name,
+                "description": getattr(t, "description", None),
+                # some MCP tool objects use `input_schema` (snake_case)
+                # while others may expose `inputSchema` (camelCase). Try both.
+                "parameters": getattr(t, "input_schema", None) or getattr(t, "inputSchema", None),
             },
         }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_summary_stats",
-            "description": "Get aggregate fraud statistics, optionally grouped by a column (e.g. 'Payment Method', 'Product Category') to compare fraud rates across categories.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "group_by": {"type": "string", "description": "Column name to group by, e.g. 'Payment Method'"},
-                },
-            },
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_overall_metrics",
-            "description": "Get overall model evaluation metrics (accuracy, precision, recall, cost) on this holdout data.",
-            "parameters": {"type": "object", "properties": {}},
-        }
-    },
-]
+        for t in mcp_tools
+    ]
 
 
-def run_tool(name, tool_input, df):
-    if name == "filter_transactions":
-        return filter_transactions(df, **tool_input)
-    if name == "get_summary_stats":
-        return get_summary_stats(df, **tool_input)
-    if name == "get_overall_metrics":
-        return compute_metrics(df)
-    return {"error": f"unknown tool {name}"}
+class MCPAgentBridge:
+    def __init__(self, mcp_server_script):
+        self.mcp_server_script = mcp_server_script
+        self.loop = None
+        self.session = None
+        self.groq_tools = None
+        self._ready = threading.Event()
+        self._stop_event = None
+        self._startup_error = None
+        self.thread = threading.Thread(target=self._run_loop, daemon=True)
+        self.thread.start()
+        if not self._ready.wait(timeout=30):
+            if self._startup_error is not None:
+                raise RuntimeError(f"MCP server failed to start: {self._startup_error}") from self._startup_error
+            raise RuntimeError("Timed out starting MCP server connection (no error captured -- possible hang).")
 
+    def _run_loop(self):
+        self.loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self.loop)
+        try:
+            self.loop.run_until_complete(self._connect_and_hold())
+        except Exception as e:
+            self._startup_error = e
+            self._ready.set()
 
-def chat_with_llm(df, messages):
-    # Initialize OpenRouter Client
-    client = OpenAI(
-        base_url="https://openrouter.ai/api/v1",
-        api_key=os.environ.get("OPENROUTER_API_KEY"),
-    )
-    
-    system_msg = {
-        "role": "system",
-        "content": (
-            "You are a fraud analyst assistant. You have tools to query a real dataset of "
-            "transactions scored by a fraud detection model. Always use the tools to ground "
-            "your answers in actual data -- never guess or make up numbers. When discussing "
-            "why a transaction was flagged, reference its top_shap_factors."
-        )
-    }
+    async def _connect_and_hold(self):
+        server_params = StdioServerParameters(command="python", args=[self.mcp_server_script])
+        async with stdio_client(server_params) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                self.session = session
+                tool_list = await session.list_tools()
+                self.groq_tools = mcp_tools_to_groq_format(tool_list.tools)
+                # Instantiate Groq client inside the MCP bridge background context
+                try:
+                    self.groq_client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
+                except Exception:
+                    self.groq_client = None
+                self._stop_event = asyncio.Event()
+                self._ready.set()
+                await self._stop_event.wait()  # keeps subprocess + session alive until shutdown
 
-    # Prepend the system prompt for OpenAI
-    current_messages = [system_msg] + messages
+    def ask(self, groq_client, messages):
+        if self.loop is None or not getattr(self.loop, 'is_running', lambda: False)():
+            err_msg = (
+                "MCP bridge not ready: background event loop is not running. "
+                "Please wait a moment and try again."
+            )
+            messages.append({"role": "assistant", "content": err_msg})
+            return err_msg, messages
 
-    while True:
-        response = client.chat.completions.create(
-            model="meta/muse-spark-1.3-contributor",
-            messages=current_messages,
-            tools=TOOLS,
-        )
-
-        message = response.choices[0].message
-
-        # If the LLM didn't call any tools, we're done
-        if not message.tool_calls:
-            text = message.content or ""
-            messages.append({"role": "assistant", "content": text})
-            return text, messages
-
-        # Store the assistant's tool call request in history
-        assistant_msg = {
-            "role": "assistant",
-            "content": message.content or "",
-            "tool_calls": [
-                {
-                    "id": t.id,
-                    "type": t.type,
-                    "function": {
-                        "name": t.function.name,
-                        "arguments": t.function.arguments
-                    }
-                } for t in message.tool_calls
-            ]
-        }
-        messages.append(assistant_msg)
-        current_messages.append(assistant_msg)
-
-        # Execute all requested tools and append their results
-        for tool_call in message.tool_calls:
-            tool_name = tool_call.function.name
+        future = asyncio.run_coroutine_threadsafe(self._ask_async(groq_client, messages), self.loop)
+        try:
+            result = future.result(timeout=90)
+            return result
+        except concurrent.futures.TimeoutError:
+            # Attempt to cancel the pending coroutine and return a user-friendly error
             try:
-                tool_input = json.loads(tool_call.function.arguments)
-            except json.JSONDecodeError:
-                tool_input = {}
-            
-            result = run_tool(tool_name, tool_input, df)
-            
-            tool_result_msg = {
-                "role": "tool",
-                "tool_call_id": tool_call.id,
-                "name": tool_name,
-                "content": json.dumps(result, default=str),
+                future.cancel()
+            except Exception:
+                pass
+            err_msg = (
+                "The assistant took too long to respond. "
+                "Please try again or reduce the scope of your question."
+            )
+            messages.append({"role": "assistant", "content": err_msg})
+            return err_msg, messages
+        except Exception as e:
+            try:
+                future.cancel()
+            except Exception:
+                pass
+            messages.append({"role": "assistant", "content": f"Assistant error: {e}"})
+            return f"Assistant error: {e}", messages
+
+    async def _ask_async(self, groq_client, messages):
+        # _ask_async runs on the MCP bridge background event loop
+        system_msg = {
+            "role": "system",
+            "content": (
+                "You are a fraud analyst assistant. You have tools to query a real dataset of "
+                "transactions scored by a fraud detection model. Always use the tools to ground "
+                "your answers in actual data -- never guess or make up numbers. When discussing "
+                "why a transaction was flagged, reference its top_shap_factors. After receiving "
+                "tool results, always respond with a complete natural-language answer -- never "
+                "return an empty response."
+            ),
+        }
+        current_messages = [system_msg] + messages
+
+        # Prefer Groq client instantiated inside the bridge (same thread/loop).
+        local_groq = getattr(self, "groq_client", None) or groq_client
+        while True:
+            try:
+                response = local_groq.chat.completions.create(
+                    model=GROQ_MODEL,
+                    messages=current_messages,
+                    tools=self.groq_tools,
+                    tool_choice="auto",
+                )
+            except Exception:
+                raise
+            message = response.choices[0].message
+
+            if not message.tool_calls:
+                text = message.content or ""
+                messages.append({"role": "assistant", "content": text})
+                return text, messages
+
+            assistant_msg = {
+                "role": "assistant",
+                "content": message.content or "",
+                "tool_calls": [
+                    {
+                        "id": t.id,
+                        "type": t.type,
+                        "function": {"name": t.function.name, "arguments": t.function.arguments},
+                    }
+                    for t in message.tool_calls
+                ],
             }
-            messages.append(tool_result_msg)
-            current_messages.append(tool_result_msg)
+            messages.append(assistant_msg)
+            current_messages.append(assistant_msg)
+
+            for tool_call in message.tool_calls:
+                tool_name = tool_call.function.name
+                try:
+                    tool_args = json.loads(tool_call.function.arguments)
+                except json.JSONDecodeError:
+                    tool_args = {}
+
+                result = await self.session.call_tool(tool_name, arguments=tool_args)
+                result_text = "".join(b.text for b in result.content if hasattr(b, "text"))
+
+                tool_msg = {"role": "tool", "tool_call_id": tool_call.id, "name": tool_name, "content": result_text}
+                messages.append(tool_msg)
+                current_messages.append(tool_msg)
 
 
 # ---------- UI ----------
@@ -235,7 +238,9 @@ try:
     predictions_df = fetch_all_predictions()
     batch4_df = fetch_batch4()
     df = predictions_df.merge(
-        batch4_df, left_on="transaction_id", right_on="Transaction ID", how="left"
+        predictions_df.merge(batch4_df, left_on="transaction_id", right_on="Transaction ID", how="left")
+        if False else batch4_df,  # placeholder guard, see note below
+        left_on="transaction_id", right_on="Transaction ID", how="left"
     )
 except Exception as e:
     st.error(f"Couldn't load data: {e}")
@@ -261,10 +266,15 @@ st.dataframe(
 )
 
 st.subheader("Ask about the data")
+
+if "mcp_bridge" not in st.session_state:
+    with st.spinner("Connecting to MCP server..."):
+        st.session_state.mcp_bridge = MCPAgentBridge(MCP_SERVER_SCRIPT)
+        st.session_state.groq_client = Groq(api_key=os.environ["GROQ_API_KEY"])
+
 if "chat_messages" not in st.session_state:
     st.session_state.chat_messages = []
 
-# Simplified message parsing for OpenAI message formats
 for msg in st.session_state.chat_messages:
     if msg["role"] == "user":
         with st.chat_message("user"):
@@ -277,5 +287,10 @@ user_input = st.chat_input("e.g. Why was transaction X flagged? Which payment me
 if user_input:
     st.session_state.chat_messages.append({"role": "user", "content": user_input})
     with st.spinner("Thinking..."):
-        _, st.session_state.chat_messages = chat_with_llm(df, st.session_state.chat_messages)
+        try:
+            _, st.session_state.chat_messages = st.session_state.mcp_bridge.ask(
+                st.session_state.groq_client, st.session_state.chat_messages
+            )
+        except Exception as e:
+            st.session_state.chat_messages.append({"role": "assistant", "content": f"Error: {e}"})
     st.rerun()
