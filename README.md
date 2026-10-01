@@ -224,6 +224,13 @@ The Streamlit dashboard includes a tool-using LLM assistant grounded in the actu
 
 ![Assistant chat](./screenshots/assistant.png)
 
+### LLM Assistant (MCP-backed)
+
+- **Architecture**: The assistant runs as a Groq-hosted LLM that uses an MCP (Model Context Protocol) server process to expose safe, auditable tools (SQL queries, record lookups, SHAP retrievals) to the model. The MCP server is launched and held by the Streamlit app inside a background event loop so the model can call tools without blocking the UI.
+- **Implementation notes**: The Streamlit `app.py` uses `MCPAgentBridge` to maintain a persistent MCP `ClientSession` and to instantiate the `Groq` client inside the bridge's background context. This ensures tool-calls and the Groq API run on the same thread/event-loop where the client was created, avoiding cross-thread issues.
+- **Safety & grounding**: All analyst responses are grounded in actual data returned by MCP tools; the assistant is configured to never fabricate numeric facts and to reference top SHAP factors when explaining individual flags.
+
+
 ---
 
 ## Repository Structure
